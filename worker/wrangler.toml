@@ -1,0 +1,11 @@
+name = "acn-rag-proxy"
+main = "acn-rag-proxy.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+# Comma-separated list of sites allowed to call this proxy, e.g. "https://yourname.github.io". "*" allows any site (not recommended).
+ALLOWED_ORIGINS = "*"
+ANTHROPIC_MODEL = "claude-haiku-5-5"
+RATE_LIMIT = "20"
+MAX_TOKENS = "700"
+# Set the key as a secret, never in this file:  wrangler secret put ANTHROPIC_API_KEY

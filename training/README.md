@@ -1,0 +1,3 @@
+# Optional fine-tuning data
+
+`acn-qa-pairs.jsonl` has 192 question-answer pairs in the chat format used by most fine-tuning services, generated from the exercises (with solutions), the glossary and the week summaries. The chatbot does NOT need it: it uses retrieval-augmented generation, so the model always answers from freshly retrieved course passages and cites them. Fine-tuning a model on this small set mainly teaches style and vocabulary, can make it overconfident about things the course does not say, and goes stale whenever you edit the course. If you still want to fine-tune (for example a small local model), use this file for style and keep retrieval on for facts.

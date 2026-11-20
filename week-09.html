@@ -1,0 +1,283 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Week 9: SDN and Programmable Data Planes | Advanced Computer Networks</title><meta name="description" content="Separating control and data planes, match-action abstractions, P4, and in-network telemetry with sketches."><link rel="stylesheet" href="assets/style.css"></head><body><aside><a class="brand" href="index.html">Advanced Computer Networks</a><input id="q" placeholder="Search topics ( / )" aria-label="Search"><nav><a href="index.html" class="">Home</a><a href="syllabus.html" class="">Syllabus</a><a href="glossary.html" class="">Glossary</a><a href="reading.html" class="">Reading list</a><a href="assignments.html" class="">Assignments</a><a href="chatbot.html" class="">Ask the course (chatbot)</a><h4>1 · Foundations</h4><a data-w="1" href="week-01.html" class=""><span>01</span>Internet Architecture and Design Principles</a><a data-w="2" href="week-02.html" class=""><span>02</span>Queueing Theory and Performance Modelling</a><a data-w="3" href="week-03.html" class=""><span>03</span>Routing: Link-State, Distance-Vector and BGP</a><h4>2 · Transport & Congestion</h4><a data-w="4" href="week-04.html" class=""><span>04</span>Congestion Control I: AIMD, Reno and CUBIC</a><a data-w="5" href="week-05.html" class=""><span>05</span>Congestion Control II: BBR, Delay-Based and Modelling</a><a data-w="6" href="week-06.html" class=""><span>06</span>Modern Transport: QUIC, TLS 1.3 and Multipath</a><h4>3 · Data Centers & Programmability</h4><a data-w="7" href="week-07.html" class=""><span>07</span>Data Center Networks</a><a data-w="8" href="week-08.html" class=""><span>08</span>Midterm Review and Exam</a><a data-w="9" href="week-09.html" class="on"><span>09</span>SDN and Programmable Data Planes</a><h4>4 · Access, Content & Security</h4><a data-w="10" href="week-10.html" class=""><span>10</span>Wireless and Mobile Networking</a><a data-w="11" href="week-11.html" class=""><span>11</span>Content Delivery and Video Streaming</a><a data-w="12" href="week-12.html" class=""><span>12</span>Network Security: DDoS, DNS, TLS and BGP</a><a data-w="13" href="week-13.html" class=""><span>13</span>Measurement, Satellite Networks and the Future</a><h4>5 · Modern Frontiers</h4><a data-w="14" href="week-14.html" class=""><span>14</span>AI Cluster Networking: RDMA, Collectives and Rail Design</a><a data-w="15" href="week-15.html" class=""><span>15</span>WAN Traffic Engineering, MPLS, Overlays and Naming</a><a data-w="16" href="week-16.html" class=""><span>16</span>Final Projects, Review and Exam</a><h4>Appendices</h4><a href="app-a.html" class="">Appendix A: Mathematics and Units Primer</a><a href="app-b.html" class="">Appendix B: Networking Fundamentals (from zero)</a><a href="app-c.html" class="">Appendix C: Tools and Lab Environment</a><a href="app-d.html" class="">Appendix D: Study Guide and Course Policies</a><h4>Downloads</h4><a href="downloads.html" class="">PDFs and lab files</a></nav></aside><main><div class="kick">Week 9 · Phase 3: Data Centers & Programmability</div><h1>SDN and Programmable Data Planes</h1><p class="lead">Separating control and data planes, match-action abstractions, P4, and in-network telemetry with sketches.</p><p class="meta">Based on: Stanford CS244, Princeton COS 561, MIT 6.829</p><div class="box"><b>Learning objectives</b><ul><li>Explain control/data plane separation and its trade-offs.</li><li>Write match-action rules and longest-prefix semantics.</li><li>Size a count-min sketch for a measurement task.</li><li>Write and run a P4-style parser and checksum update.</li><li>Size Bloom filters and sketches for a measurement task and explain the verification, update and controller-scale issues of SDN.</li></ul></div><div class="toc"><b>On this page</b><a href="#basics-openflow-concretely">Basics: OpenFlow, concretely</a><a href="#basics-three-planes-of-a-network">Basics: three planes of a network</a><a href="#why-sdn">Why SDN</a><a href="#match-action-and-p4">Match-action and P4</a><a href="#measurement-with-sketches">Measurement with sketches</a><a href="#consistent-network-updates">Consistent network updates</a><a href="#network-verification">Network verification</a><a href="#virtualised-network-functions">Virtualised network functions</a><a href="#the-programmable-pipeline-in-numbers">The programmable pipeline, in numbers</a><a href="#common-pitfalls">Common pitfalls</a><a href="#advanced-switch-architecture-and-its-limits">Advanced: switch architecture and its limits</a><a href="#advanced-telemetry-and-sketching">Advanced: telemetry and sketching</a><a href="#advanced-network-update-and-verification">Advanced: network update and verification</a><a href="#advanced-network-functions-and-in-network-computing">Advanced: network functions and in-network computing</a><a href="#advanced-a-complete-p4-program-line-by-line">Advanced: a complete P4 program, line by line</a><a href="#advanced-stateful-processing-and-what-fits-in-a-pipeline">Advanced: stateful processing and what fits in a pipeline</a><a href="#advanced-the-cost-of-telemetry">Advanced: the cost of telemetry</a><a href="#advanced-header-space-analysis-and-what-verification-costs">Advanced: header-space analysis and what verification costs</a><a href="#advanced-controller-architecture-and-scale">Advanced: controller architecture and scale</a><a href="#advanced-sdn-and-the-limits-of-centralisation">Advanced: SDN and the limits of centralisation</a><a href="#programming-assignment">Programming assignment</a><a href="#paper-reading-guide">Paper reading guide</a><a href="#lab">Code lab (runs as-is in Python 3)</a><a href="#exercises">Exercises</a><a href="#takeaway">Key takeaway</a><a href="#reading">Further reading</a></div><h2 id="basics-openflow-concretely" class="lv-b">Basics: OpenFlow, concretely</h2>
+<p>Before P4, OpenFlow defined a standard way for a controller to program a switch. Knowing its objects makes every later idea (P4 tables, verification, telemetry) easier.</p>
+<h3 id="the-cast-of-messages">The cast of messages</h3>
+<div class="tw"><table><tr><th>Message</th><th>Direction</th><th>Meaning</th></tr><tr><td>Hello / Features</td><td>both</td><td>negotiate version; the switch reports ports and tables</td></tr><tr><td>Packet-In</td><td>switch → controller</td><td>&#x27;I have no rule for this packet&#x27; (or a rule says send to controller)</td></tr><tr><td>Flow-Mod</td><td>controller → switch</td><td>add, modify or delete a rule</td></tr><tr><td>Packet-Out</td><td>controller → switch</td><td>send this specific packet out of a port</td></tr><tr><td>Port-Status</td><td>switch → controller</td><td>a link went up or down</td></tr><tr><td>Barrier</td><td>controller → switch</td><td>&#x27;tell me when everything before this is installed&#x27;</td></tr><tr><td>Stats request/reply</td><td>both</td><td>read counters per flow, port or table</td></tr></table></div>
+<h3 id="anatomy-of-a-flow-entry">Anatomy of a flow entry</h3>
+<p>A rule has a <b>match</b> (ingress port, Ethernet and IP fields, ports, VLAN, ...), a <b>priority</b> (the highest matching rule wins), <b>counters</b> (packets and bytes), <b>instructions or actions</b> (output, drop, rewrite, push a tag, go to the next table, apply a group or meter), <b>timeouts</b> (idle and hard: soft state again) and a <b>cookie</b> the controller uses to identify its rules. Since OpenFlow 1.1 a packet passes through a <b>pipeline of tables</b>; each table&#x27;s instructions may send it to a later table, which avoids the cross-product of rules that a single table would need (e.g. VLAN × ACL × routing). <b>Group tables</b> implement multipath (&#x27;select&#x27; buckets, the hardware form of ECMP) and fast failover (a group tries its first live bucket). <b>Meters</b> rate-limit.</p>
+<h3 id="a-learning-switch-as-an-sdn-application">A learning switch as an SDN application</h3>
+<p>The classic first application: when a Packet-In arrives, record that the source MAC lives on the ingress port; if the destination MAC is known, install a rule and forward, otherwise flood. The controller&#x27;s program is ten lines; the cost is the control-channel round trip for the first packet of every flow and a table entry for every active pair. Lab 9.7 counts both, and shows why production designs install rules proactively and aggregate them (per destination or per prefix).</p>
+<h3 id="why-sketches-and-filters-appear-everywhere-in-data-planes">Why sketches and filters appear everywhere in data planes</h3>
+<p>A switch has tens of megabytes of fast memory and a nanosecond-scale budget per packet, so it cannot keep an exact record for millions of flows or addresses. A <b>Bloom filter</b> answers &#x27;have I seen this item?&#x27; using a few bits per item at the price of occasional false positives and no false negatives. It is the simplest example of the trade that sketches make: <em>exchange exactness for small, fixed memory</em>. Lab 9.5 verifies the false-positive formula; the demo below lets you size one.</p>
+<h3 id="self-check">Self-check</h3>
+<p>What is the difference between Packet-In and Packet-Out? Why does a pipeline of tables need fewer rules than one big table? Can a Bloom filter produce a false negative? (No.)</p>
+<div class="demo" data-demo="bloom"></div>
+<h2 id="basics-three-planes-of-a-network" class="lv-b">Basics: three planes of a network</h2>
+<p>Every network device does three different jobs. The <b>data plane</b> moves packets: parse the header, look up a table, forward, at nanosecond timescales in hardware. The <b>control plane</b> computes the tables: routing protocols, spanning tree, ARP. The <b>management plane</b> configures devices and monitors them (CLI, SNMP, NETCONF). In traditional routers all three live in one closed box, and a new feature means waiting for the vendor.</p>
+<h3 id="what-software-defined-means">What &#x27;software-defined&#x27; means</h3>
+<p>Software-defined networking (SDN) separates the control plane from the data plane: switches become simple, fast forwarders and a (logically) centralised <b>controller</b> computes global policy and installs rules via a southbound API (OpenFlow, P4Runtime, gNMI). Applications such as traffic engineering, access control and virtual networks sit on top via a northbound API. Benefits: a global view makes optimisation and verification feasible; network behaviour becomes software that can be tested and versioned.</p>
+<h3 id="match-action-one-abstraction-for-everything">Match-action: one abstraction for everything</h3>
+<p>A switch table is a list of rules; each rule has a <b>match</b> (header fields, possibly with wildcards or prefixes), an <b>action</b> (forward to port, drop, rewrite a field, set a queue, send to the controller) and a priority. Routers, firewalls, NATs and load balancers all reduce to match-action tables. The first lab implements a tiny interpreter of this idea.</p>
+<h3 id="reactive-versus-proactive-control">Reactive versus proactive control</h3>
+<p>In <b>reactive</b> mode the first packet of a flow goes to the controller, which installs a rule: flexible but adds latency to flow setup and load to the controller. In <b>proactive</b> mode rules are pre-installed from policy, which scales and survives controller failure. Production systems are mostly proactive with centralised optimisation on a slower timescale.</p>
+<h3 id="what-p4-adds">What P4 adds</h3>
+<p>OpenFlow fixed the set of header fields a switch could match. <b>P4</b> is a language to define the parser, the match-action tables and the deparser themselves, so a switch can support new protocols, tunnels or telemetry without new silicon. A P4 program has three parts: a <b>parser</b> (a state machine extracting headers from bytes), <b>match-action control blocks</b> (tables and actions), and a <b>deparser</b> (reassembling the packet).</p>
+<pre><code>// Sketch of a P4_16 ingress block (illustrative, not a complete program)
+table ipv4_lpm {
+    key = { hdr.ipv4.dstAddr : lpm; }
+    actions = { forward(); drop(); }
+    default_action = drop();
+}
+apply { if (hdr.ipv4.isValid()) ipv4_lpm.apply(); }</code></pre>
+<h3 id="self-check">Self-check</h3>
+<p>Which plane runs OSPF? Why is a proactive design more robust to controller failure? What would a firewall rule look like as a match-action entry?</p>
+<h2 id="why-sdn">Why SDN</h2>
+<p>Traditional routers bundle control and forwarding in closed boxes. OpenFlow (McKeown et al. 2008) exposes a table of match-action rules and a logically centralised controller computes them, so network-wide policy (traffic engineering, slicing) is software. Google&#x27;s B4 WAN runs near 100% link utilisation with SDN-based traffic engineering versus 30-40% typical in conventional WANs.</p>
+<h2 id="match-action-and-p4">Match-action and P4</h2>
+<p>A switch pipeline parses headers, matches against tables (exact, ternary, longest-prefix) and applies actions (forward, rewrite, drop, meter). P4 (Bosshart et al. 2014) makes the parser and tables programmable, so new protocols or telemetry need no new silicon. Trade-offs: controller scalability and failure, consistent updates, and limited per-packet compute and memory.</p>
+<h2 id="measurement-with-sketches">Measurement with sketches</h2>
+<p>Switches cannot keep per-flow counters for millions of flows. A count-min sketch (Cormode and Muthukrishnan 2005) uses d hash rows of w counters; an update increments one counter per row and the estimate is the minimum, which never underestimates. With w = ⌈e/ε⌉ and d = ⌈ln(1/δ)⌉ the overestimate is at most εN with probability 1−δ.</p>
+<figure><span class="fn">Figure 8</span><svg viewBox="0 0 640 360" role="img" aria-label="Count-min sketch (4 rows) on a 200,000-packet Zipf stream of 5,000 flows: mean relative error of the 100 heaviest flows versus row width."><line x1="70" x2="624" y1="310.0" y2="310.0" class="g"/><text x="64" y="314.0" text-anchor="end">0</text><line x1="70" x2="624" y1="251.2" y2="251.2" class="g"/><text x="64" y="255.2" text-anchor="end">0.674</text><line x1="70" x2="624" y1="192.4" y2="192.4" class="g"/><text x="64" y="196.4" text-anchor="end">1.35</text><line x1="70" x2="624" y1="133.6" y2="133.6" class="g"/><text x="64" y="137.6" text-anchor="end">2.02</text><line x1="70" x2="624" y1="74.8" y2="74.8" class="g"/><text x="64" y="78.8" text-anchor="end">2.7</text><line x1="70" x2="624" y1="16.0" y2="16.0" class="g"/><text x="64" y="20.0" text-anchor="end">3.37</text><text x="70.0" y="326" text-anchor="middle">10</text><text x="254.7" y="326" text-anchor="middle">100</text><text x="439.3" y="326" text-anchor="middle">1e+03</text><text x="624.0" y="326" text-anchor="middle">1e+04</text><polyline fill="none" stroke="#1f6f78" stroke-width="2.2" points="218.9,30.0 274.5,195.4 330.1,258.4 385.6,291.1 441.2,303.3 496.8,308.1 552.4,309.7"/><text x="80" y="28" fill="#1f6f78" class="lg">&#9644; mean rel. error</text><line x1="70" x2="70" y1="16" y2="310" class="ax"/><line x1="70" x2="624" y1="310" y2="310" class="ax"/><text x="347.0" y="352" text-anchor="middle" class="al">row width (counters)</text><text transform="translate(14 163.0) rotate(-90)" text-anchor="middle" class="al">relative error</text></svg><figcaption>Count-min sketch (4 rows) on a 200,000-packet Zipf stream of 5,000 flows: mean relative error of the 100 heaviest flows versus row width.</figcaption></figure>
+<p>In this run the error falls about 2.5x per doubling of width (faster than the worst-case 1/w bound, because the Zipf stream is dominated by a few heavy flows), and the top flows are estimated to within 1% with 4,096 counters per row.</p>
+<h2 id="consistent-network-updates">Consistent network updates</h2>
+<p>Changing many switches&#x27; rules one by one can create transient loops or black holes. Reitblatt et al. (2012) proposed per-packet consistent updates by two-phase commit: install the new rules tagged with a new version on the internal switches first, then flip the ingress switches to stamp packets with the new version, and finally remove old rules. Every packet is processed entirely by the old or the new configuration, never a mix.</p>
+<h2 id="network-verification">Network verification</h2>
+<p>Because configurations are code, they can be checked. Header Space Analysis (Kazemian et al. 2012) treats packet headers as bit vectors and rules as transformations to answer reachability and loop questions; Batfish (Fogel et al. 2015) analyses router configurations offline. Verification finds bugs like unintended reachability or missing route filters before deployment.</p>
+<h2 id="virtualised-network-functions">Virtualised network functions</h2>
+<p>NFV moves firewalls, NATs and load balancers from appliances to software on commodity servers (Sherry et al. 2012 argued for outsourcing middleboxes). Challenges: per-packet cost at 100 Gb/s (DPDK, kernel bypass, SmartNICs), state migration during scaling, and service chaining. eBPF/XDP now processes packets inside the Linux kernel at tens of millions of packets per second per core group.</p>
+<h2 id="the-programmable-pipeline-in-numbers">The programmable pipeline, in numbers</h2>
+<p>A switch ASIC such as a 12.8 Tb/s chip handles billions of packets per second in a fixed number of match-action stages; each stage has limited SRAM/TCAM, so telemetry must be compressed (sketches) and rules aggregated. In-band network telemetry (INT) lets each hop append queue depth and timestamps to a packet, giving per-hop latency visibility.</p>
+<h2 id="common-pitfalls">Common pitfalls</h2>
+<p>Treating the controller as always available, forgetting TCAM limits (a ternary entry costs about twice the bits of an exact entry), and updating rules without ordering guarantees.</p>
+<h2 id="advanced-switch-architecture-and-its-limits" class="lv-a">Advanced: switch architecture and its limits</h2>
+<p>A programmable pipeline (e.g. PISA: Protocol-Independent Switch Architecture) consists of a programmable parser, a fixed number of match-action stages (tens), each with limited SRAM and TCAM and a few ALUs, then a deparser, with a traffic manager (queues, schedulers) in the middle. Because every packet passes each stage in one clock, there are no loops: a program must fit in the stage count, and state is limited to <b>registers</b>, <b>counters</b> and <b>meters</b> with restricted read-modify-write per packet. This is why measurement uses compact data structures. An exact-match table in SRAM costs the key width, a ternary (TCAM) rule costs about twice the key width in bits plus higher power, and longest-prefix match uses algorithmic tries or TCAM; table capacity is typically hundreds of thousands to a few million entries.</p>
+<h2 id="advanced-telemetry-and-sketching" class="lv-a">Advanced: telemetry and sketching</h2>
+<p>In-band network telemetry (INT) lets each hop append metadata (switch ID, queue depth, timestamps) to a probe or data packet, enabling per-hop latency decomposition; sinks aggregate and export. Sketches summarise streams in sublinear memory: count-min for frequency (never underestimates; additive error ≤ εN with probability 1−δ for w = ⌈e/ε⌉, d = ⌈ln 1/δ⌉), count sketch for unbiased estimates, Bloom filters for membership, HyperLogLog for distinct counts, and universal sketches for many metrics at once. Sketches are mergeable across switches (element-wise addition when hash functions match) and across time. The third lab shows a precision-recall trade-off: narrow sketches over-estimate many mice and produce false heavy hitters; wide ones recover both.</p>
+<h2 id="advanced-network-update-and-verification" class="lv-a">Advanced: network update and verification</h2>
+<p>Consistent updates (Reitblatt et al. 2012) give per-packet consistency by version-tagging; later work makes updates faster using ordering (dependency graphs), incremental updates, and time-based updates with synchronised clocks. <b>Verification</b> checks properties of the network: Header Space Analysis represents sets of packets as wildcard bit vectors and rules as transfer functions; VeriFlow and NetPlumber check each update incrementally in microseconds to milliseconds; Batfish builds a model of router configurations to answer reachability and policy questions before deployment; Minesweeper and later tools encode control-plane behaviour in SMT. P4 verification (p4v, Vera) checks the programs themselves. Practical lesson: most outages come from configuration, so test and verify the network the way software is tested.</p>
+<h2 id="advanced-network-functions-and-in-network-computing" class="lv-a">Advanced: network functions and in-network computing</h2>
+<p>NFV runs firewalls, NATs, load balancers (Maglev, Katran), DPI and proxies as software on commodity hardware. High-performance packet I/O uses DPDK (user-space polling), eBPF/XDP (programs in the kernel receive path, handling tens of millions of packets per second per few cores) and SmartNICs/DPUs (offload flow tables). Programmable switches have been used for in-network key-value caching (NetCache, SOSP 2017), aggregation for ML training (SwitchML, NSDI 2021), consensus acceleration and load balancing, trading severe memory limits for line-rate speed. Operating SDN at scale also needs management interfaces: model-driven configuration (YANG with NETCONF/gNMI), streaming telemetry, intent-based abstractions, and controllers such as ONOS or OpenDaylight with replicated state for fault tolerance.</p>
+<h2 id="advanced-a-complete-p4-program-line-by-line" class="lv-a">Advanced: a complete P4 program, line by line</h2>
+<p>The listing below follows the structure of the standard P4_16 tutorial programs for the v1model architecture (BMv2). It is shown for study and was not compiled in this build.</p>
+<pre><code>#include &lt;core.p4&gt;
+#include &lt;v1model.p4&gt;
+const bit&lt;16&gt; TYPE_IPV4 = 0x800;
+typedef bit&lt;9&gt;  egressSpec_t;  typedef bit&lt;48&gt; macAddr_t;  typedef bit&lt;32&gt; ip4Addr_t;
+header ethernet_t { macAddr_t dstAddr; macAddr_t srcAddr; bit&lt;16&gt; etherType; }
+header ipv4_t {
+    bit&lt;4&gt; version; bit&lt;4&gt; ihl; bit&lt;8&gt; diffserv; bit&lt;16&gt; totalLen; bit&lt;16&gt; identification;
+    bit&lt;3&gt; flags; bit&lt;13&gt; fragOffset; bit&lt;8&gt; ttl; bit&lt;8&gt; protocol; bit&lt;16&gt; hdrChecksum;
+    ip4Addr_t srcAddr; ip4Addr_t dstAddr; }
+struct metadata { }
+struct headers { ethernet_t ethernet; ipv4_t ipv4; }
+
+parser MyParser(packet_in packet, out headers hdr, inout metadata meta, inout standard_metadata_t sm) {
+    state start { transition parse_ethernet; }
+    state parse_ethernet { packet.extract(hdr.ethernet);
+        transition select(hdr.ethernet.etherType) { TYPE_IPV4: parse_ipv4; default: accept; } }
+    state parse_ipv4 { packet.extract(hdr.ipv4); transition accept; }
+}
+control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply { } }
+control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadata_t sm) {
+    action drop() { mark_to_drop(sm); }
+    action ipv4_forward(macAddr_t dstAddr, egressSpec_t port) {
+        sm.egress_spec = port; hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
+        hdr.ethernet.dstAddr = dstAddr; hdr.ipv4.ttl = hdr.ipv4.ttl - 1; }
+    table ipv4_lpm { key = { hdr.ipv4.dstAddr: lpm; } actions = { ipv4_forward; drop; NoAction; }
+                     size = 1024; default_action = drop(); }
+    apply { if (hdr.ipv4.isValid()) { ipv4_lpm.apply(); } }
+}
+control MyEgress(inout headers hdr, inout metadata meta, inout standard_metadata_t sm) { apply { } }
+control MyComputeChecksum(inout headers hdr, inout metadata meta) {
+    apply { update_checksum(hdr.ipv4.isValid(),
+        { hdr.ipv4.version, hdr.ipv4.ihl, hdr.ipv4.diffserv, hdr.ipv4.totalLen, hdr.ipv4.identification,
+          hdr.ipv4.flags, hdr.ipv4.fragOffset, hdr.ipv4.ttl, hdr.ipv4.protocol, hdr.ipv4.srcAddr, hdr.ipv4.dstAddr },
+        hdr.ipv4.hdrChecksum, HashAlgorithm.csum16); } }
+control MyDeparser(packet_out packet, in headers hdr) { apply { packet.emit(hdr.ethernet); packet.emit(hdr.ipv4); } }
+V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(), MyComputeChecksum(), MyDeparser()) main;</code></pre>
+<p><b>Reading it.</b> The <code>header</code> types define byte layouts exactly as Lab 9.4&#x27;s <code>struct.unpack</code> does. The parser is a state machine: it extracts the Ethernet header, branches on <code>etherType</code>, and extracts IPv4. <code>MyIngress</code> holds the match-action logic: a table keyed on the destination address with <em>longest-prefix</em> matching whose actions rewrite the MAC addresses, set the output port and decrement the TTL; the controller fills the table at run time through P4Runtime. <code>MyComputeChecksum</code> recomputes the header checksum after the TTL change (hardware often uses the incremental update shown in Lab 9.4). The deparser re-serialises the valid headers. A header never extracted stays invalid and is not emitted, which is how tunnels are added or removed: extract the outer header and do not emit it.</p>
+<h2 id="advanced-stateful-processing-and-what-fits-in-a-pipeline" class="lv-a">Advanced: stateful processing and what fits in a pipeline</h2>
+<p>A <b>register</b> array stores per-index state that a packet can read, modify and write back within one stage, enabling per-flow counters, sketches (a count-min row is one register array indexed by a hash), meters and simple state machines such as TCP flag tracking. Constraints decide what is feasible: a packet touches each register at most once in the pipeline; the arithmetic is integer, with limited ops; recirculation (sending the packet through the pipeline again) buys extra passes at the cost of throughput; and the stage count (a dozen to a few tens) bounds dependent steps. This is why algorithms must be redesigned for the data plane: HULA keeps the best next hop per destination ToR using probes rather than flow state; heavy-hitter detectors keep a small &#x27;candidate&#x27; table next to a sketch; and in-network aggregation (SwitchML) streams fixed-size vectors through a pool of accumulators.</p>
+<h2 id="advanced-the-cost-of-telemetry" class="lv-a">Advanced: the cost of telemetry</h2>
+<p>In-band telemetry adds metadata to packets: with k hops and h bytes of metadata per hop the added bytes are about a header plus k·h (e.g. 5 hops × 16 B = 80 B, 5.3% of a 1,500-byte packet and 55% of a 150-byte one). Operators therefore <em>sample</em> (mark one packet in N), use postcards (each switch exports its own report rather than stacking it in the packet) or export only on events such as a queue exceeding a threshold or a packet drop (mirror-on-drop). The collector must handle millions of reports per second, so filtering and aggregation in the data plane (Bloom filters and sketches again) are part of the design.</p>
+<figure><span class="fn">Figure 20</span><svg viewBox="0 0 640 360" role="img" aria-label="Bloom-filter false-positive rate versus bits per item: optimal k = (m/n)·ln 2 against a fixed k = 3. Each extra bit per item cuts the optimal rate by about 38%, so ~10 bits per item gives about 1%."><line x1="70" x2="624" y1="310.0" y2="310.0" class="g"/><text x="64" y="314.0" text-anchor="end">1e-06</text><line x1="70" x2="624" y1="261.0" y2="261.0" class="g"/><text x="64" y="265.0" text-anchor="end">1e-05</text><line x1="70" x2="624" y1="212.0" y2="212.0" class="g"/><text x="64" y="216.0" text-anchor="end">0.0001</text><line x1="70" x2="624" y1="163.0" y2="163.0" class="g"/><text x="64" y="167.0" text-anchor="end">0.001</text><line x1="70" x2="624" y1="114.0" y2="114.0" class="g"/><text x="64" y="118.0" text-anchor="end">0.01</text><line x1="70" x2="624" y1="65.0" y2="65.0" class="g"/><text x="64" y="69.0" text-anchor="end">0.1</text><line x1="70" x2="624" y1="16.0" y2="16.0" class="g"/><text x="64" y="20.0" text-anchor="end">1</text><text x="70.0" y="326" text-anchor="middle">4</text><text x="180.8" y="326" text-anchor="middle">8</text><text x="291.6" y="326" text-anchor="middle">12</text><text x="402.4" y="326" text-anchor="middle">16</text><text x="513.2" y="326" text-anchor="middle">20</text><text x="624.0" y="326" text-anchor="middle">24</text><polyline fill="none" stroke="#1f6f78" stroke-width="2.2" points="70.0,56.9 97.7,67.1 125.4,77.3 153.1,87.6 180.8,97.8 208.5,108.0 236.2,118.2 263.9,128.5 291.6,138.7 319.3,148.9 347.0,159.1 374.7,169.4 402.4,179.6 430.1,189.8 457.8,200.0 485.5,210.3 513.2,220.5 540.9,230.7 568.6,240.9 596.3,251.2 624.0,261.4"/><text x="80" y="28" fill="#1f6f78" class="lg">&#9644; optimal k</text><polyline fill="none" stroke="#c0562b" stroke-width="2.2" points="70.0,56.8 97.7,66.8 125.4,75.5 153.1,83.3 180.8,90.2 208.5,96.5 236.2,102.2 263.9,107.5 291.6,112.3 319.3,116.8 347.0,121.1 374.7,125.0 402.4,128.8 430.1,132.3 457.8,135.6 485.5,138.8 513.2,141.8 540.9,144.7 568.6,147.5 596.3,150.2 624.0,152.7"/><text x="230" y="28" fill="#c0562b" class="lg">&#9644; k = 3</text><line x1="70" x2="70" y1="16" y2="310" class="ax"/><line x1="70" x2="624" y1="310" y2="310" class="ax"/><text x="347.0" y="352" text-anchor="middle" class="al">bits per item (m/n)</text><text transform="translate(14 163.0) rotate(-90)" text-anchor="middle" class="al">false-positive rate</text></svg><figcaption>Bloom-filter false-positive rate versus bits per item: optimal k = (m/n)·ln 2 against a fixed k = 3. Each extra bit per item cuts the optimal rate by about 38%, so ~10 bits per item gives about 1%.</figcaption></figure>
+<h2 id="advanced-header-space-analysis-and-what-verification-costs" class="lv-a">Advanced: header-space analysis and what verification costs</h2>
+<p>Lab 9.6 treats each rule as a transfer function on sets of headers. Real tools represent these sets as unions of wildcard expressions (HSA), binary decision diagrams or SMT formulas, and answer reachability, loop, black-hole and isolation questions. Complexity comes from rewrites (NAT, tunnels) and from the number of rules; tools reach millions of rules by computing <em>equivalence classes</em> of packets that are treated identically (VeriFlow, APV) and by processing updates incrementally. Control-plane verification (Batfish-like) goes one level up: it models the routing protocols to predict the forwarding tables from the configuration, catching errors before deployment. Limits: models of vendor behaviour may be incomplete, dynamic behaviour (failures, timing, convergence) is harder than static snapshots, and verification proves only the properties you state.</p>
+<h2 id="advanced-controller-architecture-and-scale" class="lv-a">Advanced: controller architecture and scale</h2>
+<p>A production controller is a distributed system: a replicated, consistent store for network state (ONOS and OpenDaylight use clustering with consensus or eventually consistent stores for different data), southbound drivers for many device types, northbound APIs, and application logic. Typical goals: tens of thousands of devices, sub-second reaction to failures, no single point of failure. Design principles drawn from operations: keep the data plane able to forward without the controller (fail-static); reconcile <em>intended</em> versus <em>actual</em> state continuously rather than trusting every message; version and roll out network changes like software with staged rollout and automatic rollback; and monitor the controller&#x27;s own latency. Management protocols have converged on <b>gNMI/gRPC</b> with <b>YANG</b> models and streaming telemetry instead of polling SNMP.</p>
+<h2 id="advanced-sdn-and-the-limits-of-centralisation" class="lv-a">Advanced: SDN and the limits of centralisation</h2>
+<p>Centralisation gives a global view but adds a control-loop latency of milliseconds to seconds, so reflexes (fast reroute, link-failure detection with BFD, load balancing per flowlet) stay in the data plane or on the device, while slow optimisation (traffic engineering, capacity planning, policy) lives in the controller. This hybrid, a <b>logically centralised, physically distributed</b> control plane, is the pattern in Google&#x27;s Jupiter and B4, in cloud virtual networks (the controller pushes encapsulation and filtering rules to host virtual switches such as Open vSwitch or custom smart NICs) and in enterprise intent-based systems.</p>
+<h3 id="lab-9-1">Lab 9.1: A match-action switch</h3><p>A tiny interpreter for prioritised wildcard rules, the abstraction behind OpenFlow and P4 tables. Fields not mentioned in a rule are wildcards.</p><pre><code>rules = [  # (priority, match dict, action)
+    (300, {&quot;proto&quot;: &quot;tcp&quot;, &quot;dport&quot;: 22}, &quot;drop&quot;),
+    (200, {&quot;dst&quot;: &quot;10.1.2.0/24&quot;}, &quot;port3&quot;),
+    (100, {&quot;dst&quot;: &quot;10.0.0.0/8&quot;}, &quot;port1&quot;),
+    (0,   {}, &quot;send_to_controller&quot;),
+]
+def ip(a): x = [int(v) for v in a.split(&quot;.&quot;)]; return (x[0] &lt;&lt; 24) | (x[1] &lt;&lt; 16) | (x[2] &lt;&lt; 8) | x[3]
+def in_prefix(addr, pre):
+    base, l = pre.split(&quot;/&quot;); l = int(l); m = (0xFFFFFFFF &lt;&lt; (32 - l)) &amp; 0xFFFFFFFF
+    return ip(addr) &amp; m == ip(base) &amp; m
+def matches(pkt, m):
+    for k, v in m.items():
+        if k == &quot;dst&quot;:
+            if not in_prefix(pkt[&quot;dst&quot;], v): return False
+        elif pkt.get(k) != v: return False
+    return True
+def forward(pkt):
+    return next(a for pr, m, a in sorted(rules, key=lambda r: -r[0]) if matches(pkt, m))
+for pkt in ({&quot;dst&quot;: &quot;10.1.2.7&quot;, &quot;proto&quot;: &quot;udp&quot;, &quot;dport&quot;: 53}, {&quot;dst&quot;: &quot;10.9.9.9&quot;, &quot;proto&quot;: &quot;tcp&quot;, &quot;dport&quot;: 80},
+            {&quot;dst&quot;: &quot;10.1.2.7&quot;, &quot;proto&quot;: &quot;tcp&quot;, &quot;dport&quot;: 22}, {&quot;dst&quot;: &quot;8.8.8.8&quot;, &quot;proto&quot;: &quot;udp&quot;, &quot;dport&quot;: 53}):
+    print(pkt, &quot;-&gt;&quot;, forward(pkt))</code></pre><div class="out"><b>Output</b><pre>{&#x27;dst&#x27;: &#x27;10.1.2.7&#x27;, &#x27;proto&#x27;: &#x27;udp&#x27;, &#x27;dport&#x27;: 53} -&gt; port3
+{&#x27;dst&#x27;: &#x27;10.9.9.9&#x27;, &#x27;proto&#x27;: &#x27;tcp&#x27;, &#x27;dport&#x27;: 80} -&gt; port1
+{&#x27;dst&#x27;: &#x27;10.1.2.7&#x27;, &#x27;proto&#x27;: &#x27;tcp&#x27;, &#x27;dport&#x27;: 22} -&gt; drop
+{&#x27;dst&#x27;: &#x27;8.8.8.8&#x27;, &#x27;proto&#x27;: &#x27;udp&#x27;, &#x27;dport&#x27;: 53} -&gt; send_to_controller</pre></div><h3 id="lab-9-2">Lab 9.2: Consistent updates: naive versus two-phase</h3><p>Four switches A, B, C, D. The old routes are A→B→C→D; the new ones are A→C→B→D. Updating the switches one at a time in every possible order exposes transient loops; version-tagging (two-phase) never does.</p><pre><code>from itertools import permutations
+old = {&quot;A&quot;: &quot;B&quot;, &quot;B&quot;: &quot;C&quot;, &quot;C&quot;: &quot;D&quot;}
+new = {&quot;A&quot;: &quot;C&quot;, &quot;B&quot;: &quot;D&quot;, &quot;C&quot;: &quot;B&quot;}
+def reaches(table, src, dst=&quot;D&quot;):
+    seen, n = set(), src
+    while n != dst:
+        if n in seen or n not in table: return False
+        seen.add(n); n = table[n]
+    return True
+bad = 0
+for order in permutations(&quot;ABC&quot;):
+    t = dict(old); ok = True
+    for sw in order:
+        t[sw] = new[sw]
+        ok = ok and all(reaches(t, s) for s in &quot;ABC&quot;)
+    bad += not ok
+    print(&quot;update order&quot;, &quot;&quot;.join(order), &quot;-&gt; transient loop/blackhole:&quot;, not ok)
+print(f&quot;{bad} of 6 orders break connectivity; two-phase update: every packet follows a complete old or new path:&quot;,
+      reaches(old, &quot;A&quot;), reaches(new, &quot;A&quot;))</code></pre><div class="out"><b>Output</b><pre>update order ABC -&gt; transient loop/blackhole: False
+update order ACB -&gt; transient loop/blackhole: True
+update order BAC -&gt; transient loop/blackhole: False
+update order BCA -&gt; transient loop/blackhole: False
+update order CAB -&gt; transient loop/blackhole: True
+update order CBA -&gt; transient loop/blackhole: True
+3 of 6 orders break connectivity; two-phase update: every packet follows a complete old or new path: True True</pre></div><h3 id="lab-9-3">Lab 9.3: Heavy-hitter detection with a count-min sketch</h3><p>Detect flows carrying at least 0.5% of 200,000 packets with a 4-row sketch of increasing width; report precision and recall against ground truth.</p><pre><code>import random
+from collections import Counter
+random.seed(5); n_flows, N = 5000, 200000
+stream = random.choices(range(n_flows), [1 / (i + 1) for i in range(n_flows)], k=N)
+true = Counter(stream); thr = 0.005 * N
+hh = {f for f, c in true.items() if c &gt;= thr}
+def detect(w, d=4):
+    ab = [(random.randrange(1, 10**9), random.randrange(10**9)) for _ in range(d)]
+    t = [[0] * w for _ in range(d)]
+    for x in stream:
+        for j, (a, b) in enumerate(ab): t[j][(a * x + b) % 1000003 % w] += 1
+    est = lambda f: min(t[j][(a * f + b) % 1000003 % w] for j, (a, b) in enumerate(ab))
+    found = {f for f in true if est(f) &gt;= thr}
+    tp = len(found &amp; hh); return tp / max(1, len(found)), tp / len(hh)
+print(&quot;true heavy hitters:&quot;, len(hh))
+for w in (64, 256, 1024, 4096):
+    pr, rc = detect(w); print(f&quot;width {w:5d}: precision {pr:5.1%}  recall {rc:5.1%}&quot;)</code></pre><div class="out"><b>Output</b><pre>true heavy hitters: 22
+width    64: precision  0.4%  recall 100.0%
+width   256: precision 78.6%  recall 100.0%
+width  1024: precision 95.7%  recall 100.0%
+width  4096: precision 100.0%  recall 100.0%</pre></div><h3 id="lab-9-4">Lab 9.4: From bytes to headers: parsing IPv4 and updating the checksum</h3><p>A programmable parser extracts headers from raw bytes; a data-plane step decrements the TTL and fixes the checksum. The sample header is the standard Wikipedia example (checksum 0xb861). The incremental update is RFC 1624: HC&#x27; = ~(~HC + ~m + m&#x27;).</p><pre><code>import struct
+def csum(data):
+    s = sum(struct.unpack(&quot;!%dH&quot; % (len(data) // 2), data))
+    while s &gt;&gt; 16: s = (s &amp; 0xFFFF) + (s &gt;&gt; 16)
+    return (~s) &amp; 0xFFFF
+hdr = bytes.fromhex(&quot;450000730000400040110000c0a80001c0a800c7&quot;)      # checksum field zeroed
+c = csum(hdr); print(&quot;computed header checksum:&quot;, hex(c), &quot;(known answer 0xb861)&quot;)
+pkt = bytearray(hdr); pkt[10:12] = c.to_bytes(2, &quot;big&quot;)
+print(&quot;checksum over the finished header (must be 0):&quot;, csum(bytes(pkt)))
+def parse_ipv4(b):
+    v_ihl, tos, tot, ident, ff, ttl, proto, ck, src, dst = struct.unpack(&quot;!BBHHHBBH4s4s&quot;, b[:20])
+    return dict(version=v_ihl &gt;&gt; 4, ihl=v_ihl &amp; 15, total_len=tot, ttl=ttl, proto=proto, src=&quot;.&quot;.join(map(str, src)), dst=&quot;.&quot;.join(map(str, dst)))
+print(parse_ipv4(bytes(pkt)))
+old = (pkt[8] &lt;&lt; 8) | pkt[9]; pkt[8] -= 1; new = (pkt[8] &lt;&lt; 8) | pkt[9]       # forward: TTL - 1
+hc = int.from_bytes(pkt[10:12], &quot;big&quot;)
+s = (~hc &amp; 0xFFFF) + (~old &amp; 0xFFFF) + new
+while s &gt;&gt; 16: s = (s &amp; 0xFFFF) + (s &gt;&gt; 16)
+inc = (~s) &amp; 0xFFFF
+z = bytearray(pkt); z[10:12] = b&quot;\x00\x00&quot;
+print(&quot;incremental checksum:&quot;, hex(inc), &quot;| full recomputation:&quot;, hex(csum(bytes(z))), &quot;| equal:&quot;, inc == csum(bytes(z)))</code></pre><div class="out"><b>Output</b><pre>computed header checksum: 0xb861 (known answer 0xb861)
+checksum over the finished header (must be 0): 0
+{&#x27;version&#x27;: 4, &#x27;ihl&#x27;: 5, &#x27;total_len&#x27;: 115, &#x27;ttl&#x27;: 64, &#x27;proto&#x27;: 17, &#x27;src&#x27;: &#x27;192.168.0.1&#x27;, &#x27;dst&#x27;: &#x27;192.168.0.199&#x27;}
+incremental checksum: 0xb961 | full recomputation: 0xb961 | equal: True</pre></div><h3 id="lab-9-5">Lab 9.5: Bloom filters: measured versus theoretical false-positive rate</h3><p>A Bloom filter of m bits and k hash functions holds n items with false-positive rate (1 − e^(−kn/m))^k. Insert 20,000 items, then query 50,000 items that were never inserted.</p><pre><code>import hashlib, math
+class Bloom:
+    def __init__(self, m, k): self.m, self.k, self.bits = m, k, bytearray(m)
+    def _idx(self, x):
+        h = hashlib.sha256(str(x).encode()).digest()
+        a, b = int.from_bytes(h[:8], &quot;big&quot;), int.from_bytes(h[8:16], &quot;big&quot;) | 1
+        return [(a + i * b) % self.m for i in range(self.k)]            # double hashing
+    def add(self, x):
+        for i in self._idx(x): self.bits[i] = 1
+    def __contains__(self, x): return all(self.bits[i] for i in self._idx(x))
+n = 20000
+print(&quot;bits/item  k   measured FPR   theory&quot;)
+for b in (4, 8, 12, 16):
+    m = n * b; k = max(1, round(b * math.log(2))); f = Bloom(m, k)
+    for i in range(n): f.add(i)
+    fp = sum((n + j) in f for j in range(50000)) / 50000
+    print(f&quot;{b:9d} {k:3d} {fp:12.4%} {(1 - math.exp(-k * n / m)) ** k:10.4%}&quot;)</code></pre><div class="out"><b>Output</b><pre>bits/item  k   measured FPR   theory
+        4   3     14.7280%   14.6892%
+        8   6      2.1300%    2.1577%
+       12   8      0.2760%    0.3142%
+       16  11      0.0420%    0.0459%</pre></div><h3 id="lab-9-6">Lab 9.6: A miniature header-space analysis: finding a forwarding loop</h3><p>Packet headers are 8-bit strings over {0,1,x}. Each switch has ordered match rules. We propagate the set of headers that match each rule along the network and flag paths that revisit a switch. This is the core idea of Header Space Analysis.</p><pre><code>def inter(a, b):
+    out = []
+    for x, y in zip(a, b):
+        if x == &quot;x&quot;: out.append(y)
+        elif y == &quot;x&quot; or x == y: out.append(x)
+        else: return None
+    return &quot;&quot;.join(out)
+net = {&quot;A&quot;: [(&quot;1xxxxxxx&quot;, &quot;B&quot;), (&quot;0xxxxxxx&quot;, &quot;C&quot;)],
+       &quot;B&quot;: [(&quot;11xxxxxx&quot;, &quot;D&quot;), (&quot;10xxxxxx&quot;, &quot;A&quot;)],        # bug: headers 10xxxxxx bounce back to A
+       &quot;C&quot;: [(&quot;xxxxxxxx&quot;, &quot;D&quot;)],
+       &quot;D&quot;: [(&quot;xxxxxxxx&quot;, &quot;deliver&quot;)]}
+def explore(node, hs, path, found):
+    if node == &quot;deliver&quot;: found.append((&quot;delivered&quot;, path, hs)); return
+    for match, nxt in net[node]:
+        h = inter(hs, match)
+        if h is None: continue
+        if nxt in path: found.append((&quot;LOOP&quot;, path + [nxt], h)); continue
+        explore(nxt, h, path + [nxt], found)
+found = []; explore(&quot;A&quot;, &quot;xxxxxxxx&quot;, [&quot;A&quot;], found)
+for kind, path, hs in found: print(f&quot;{kind:9s} {&#x27;-&gt;&#x27;.join(path):16s} headers {hs}&quot;)</code></pre><div class="out"><b>Output</b><pre>delivered A-&gt;B-&gt;D-&gt;deliver headers 11xxxxxx
+LOOP      A-&gt;B-&gt;A          headers 10xxxxxx
+delivered A-&gt;C-&gt;D-&gt;deliver headers 0xxxxxxx</pre></div><h3 id="lab-9-7">Lab 9.7: Reactive versus proactive rule installation</h3><p>200 hosts generate 20,000 random flows. A reactive controller installs an exact-match (source, destination) rule for each new pair via Packet-In and Flow-Mod; a proactive controller pre-installs one rule per destination.</p><pre><code>import random
+random.seed(11); H, F = 200, 20000
+seen = set(); packet_in = 0
+for _ in range(F):
+    s, d = random.randrange(H), random.randrange(H)
+    if s != d and (s, d) not in seen: seen.add((s, d)); packet_in += 1
+print(f&quot;reactive exact-match: {packet_in} Packet-In/Flow-Mod pairs, {len(seen)} table entries&quot;)
+print(f&quot;proactive per-destination: 0 Packet-Ins, {H} entries ({len(seen) / H:.0f}x smaller table)&quot;)
+print(&quot;all-pairs exact entries for 2,000 hosts:&quot;, 2000 * 1999)
+print(&quot;control-channel load at 10,000 new flows/s with 128-byte Packet-Ins:&quot;, 10000 * 128 * 8 / 1e6, &quot;Mb/s&quot;)</code></pre><div class="out"><b>Output</b><pre>reactive exact-match: 15651 Packet-In/Flow-Mod pairs, 15651 table entries
+proactive per-destination: 0 Packet-Ins, 200 entries (78x smaller table)
+all-pairs exact entries for 2,000 hosts: 3998000
+control-channel load at 10,000 new flows/s with 128-byte Packet-Ins: 10.24 Mb/s</pre></div>
+<h2 id="programming-assignment">Programming assignment</h2>
+<p>Write a behavioural model (P4_16 or Python) that does longest-prefix forwarding and a count-min heavy-hitter detector. Run it on a Zipf trace and report precision and recall for the top 50 flows versus sketch width. Then build a two-phase consistent update in a simulator and show a transient loop under a naive update.</p>
+<h2 id="paper-reading-guide">Paper reading guide</h2>
+<p>McKeown et al. (2008): which limitations does the paper itself acknowledge? Bosshart et al. (2014): the three goals of P4. Reitblatt et al. (2012): what per-packet consistency guarantees.</p><h2 id="lab">Code lab (runs as-is in Python 3)</h2><pre><code>rules = [(&quot;10.0.0.0/8&quot;, &quot;port1&quot;), (&quot;10.1.0.0/16&quot;, &quot;port2&quot;), (&quot;10.1.2.0/24&quot;, &quot;port3&quot;), (&quot;0.0.0.0/0&quot;, &quot;drop&quot;)]
+def ip(s): a = s.split(&quot;.&quot;); return sum(int(x) &lt;&lt; (24 - 8 * i) for i, x in enumerate(a))
+def lpm(addr):
+    best = None
+    for pre, act in rules:
+        base, l = pre.split(&quot;/&quot;); l = int(l); mask = (0xFFFFFFFF &lt;&lt; (32 - l)) &amp; 0xFFFFFFFF if l else 0
+        if ip(addr) &amp; mask == ip(base) &amp; mask and (best is None or l &gt; best[0]): best = (l, act)
+    return best[1]
+for a in (&quot;10.1.2.7&quot;, &quot;10.1.9.9&quot;, &quot;10.200.0.1&quot;, &quot;8.8.8.8&quot;): print(a, &quot;-&gt;&quot;, lpm(a))
+
+import random
+random.seed(3); w, d = 256, 3
+ab = [(random.randrange(1, 10**9), random.randrange(10**9)) for _ in range(d)]
+h = lambda j, x: (ab[j][0] * x + ab[j][1]) % 1000003 % w
+def sketch(stream):
+    t = [[0] * w for _ in range(d)]
+    for x in stream:
+        for j in range(d): t[j][h(j, x)] += 1
+    return t
+A, B = [1, 2, 2, 3] * 50, [2, 4, 4, 4] * 50
+SA, SB = sketch(A), sketch(B); M = [[a + b for a, b in zip(r1, r2)] for r1, r2 in zip(SA, SB)]
+est = lambda S, x: min(S[j][h(j, x)] for j in range(d))
+print(&quot;merged estimate of flow 2:&quot;, est(M, 2), &quot;  true:&quot;, (A + B).count(2))
+print(&quot;merged equals sketch of concatenation:&quot;, M == sketch(A + B))</code></pre><div class="out"><b>Output</b><pre>10.1.2.7 -&gt; port3
+10.1.9.9 -&gt; port2
+10.200.0.1 -&gt; port1
+8.8.8.8 -&gt; drop
+merged estimate of flow 2: 150   true: 150
+merged equals sketch of concatenation: True</pre></div><h2 id="exercises">Exercises</h2><details><summary>Exercise 1: Choose CMS dimensions for ε = 0.001, δ = 0.01.</summary><p>w = ⌈e/0.001⌉ = 2719, d = ⌈ln 100⌉ = 5, i.e. about 13,600 counters.</p></details><details><summary>Exercise 2: Name two drawbacks of a logically centralised controller.</summary><p>Single point of failure/scalability and added control latency; mitigated by replicated, distributed controllers and proactive rule installation.</p></details><details><summary>Exercise 3: Why are count-min sketches mergeable across switches?</summary><p>With identical hash functions the counter arrays are linear: adding two sketches element-wise gives the sketch of the combined stream, so a controller can merge per-switch sketches.</p></details><details><summary>Exercise 4: In a two-phase update, why must internal switches be updated before the ingress?</summary><p>If ingress stamped the new version first, packets would reach internal switches lacking rules for it and be dropped.</p></details><details><summary>Exercise 5: Heavy hitters: flows &gt; 1% of N = 10⁶ packets. A sketch with ε = 0.001 overestimates by at most how much?</summary><p>εN = 1000 packets (w.h.p.), so a 10,000-packet threshold is reliable.</p></details><details><summary>Exercise 6: A ternary 5-tuple rule (104 bits) needs how many TCAM bits?</summary><p>About 2 × 104 = 208 (two bits per ternary bit).</p></details><details><summary>Exercise 7: A Bloom filter holds n = 1,000,000 items in 10 bits per item with k = 7 hash functions. Memory and false-positive rate?</summary><p>m = 10⁷ bits = 1.25 MB; FPR ≈ (1 − e^(−0.7))⁷ = 0.5034⁷ ≈ 0.82%.</p></details><details><summary>Exercise 8: A reactive controller handles 10,000 new flows/s with 128-byte Packet-Ins. Control-channel bandwidth?</summary><p>10,000 × 128 × 8 = 10.24 Mb/s (plus the Flow-Mods back), and every flow&#x27;s first packet pays a controller round trip.</p></details><details><summary>Exercise 9: 2,000 hosts, exact-match all-pairs rules. Entries needed versus per-destination rules?</summary><p>2,000 × 1,999 ≈ 4.0 million versus 2,000.</p></details><details><summary>Exercise 10: A ternary 5-tuple rule uses 104 key bits. How much TCAM do 1 million such rules need?</summary><p>About 2 × 104 = 208 bits each → 208 Mbit ≈ 26 MB, far beyond typical TCAM capacities, so rules must be aggregated or kept in SRAM-based tables.</p></details><details><summary>Exercise 11: Why must an incremental checksum update use the old <em>and</em> new 16-bit word?</summary><p>The checksum is a one&#x27;s-complement sum, so replacing a word m by m&#x27; changes it by (m&#x27; − m): HC&#x27; = ~(~HC + ~m + m&#x27;).</p></details><details><summary>Exercise 12: Why do the 10xxxxxx headers loop in the header-space lab?</summary><p>Switch B sends them back to A, and A forwards all headers starting with 1 to B again.</p></details><h2 id="takeaway">Key takeaway</h2><div class="note">CMS error ≤ ε·N with prob. 1−δ ; w=⌈e/ε⌉, d=⌈ln 1/δ⌉</div><h2 id="reading">Further reading</h2><ul><li>McKeown et al. (2008) OpenFlow: enabling innovation in campus networks.</li><li>Bosshart et al. (2014) P4: programming protocol-independent packet processors.</li><li>Cormode &amp; Muthukrishnan (2005) An improved data stream summary: the count-min sketch.</li><li>Jain et al. (2013) B4.</li><li>Bloom (1970) Space/time trade-offs in hash coding with allowable errors. CACM.</li><li>Broder &amp; Mitzenmacher (2004) Network applications of Bloom filters: a survey.</li><li>Kazemian, Varghese, McKeown (2012) Header space analysis. NSDI.</li><li>Fogel et al. (2015) A general approach to network configuration analysis (Batfish). NSDI.</li><li>Katta et al. (2016) HULA: scalable load balancing using programmable data planes. SOSR.</li><li>Jin et al. (2017) NetCache: balancing key-value stores with fast in-network caching. SOSP.</li><li>Sapio et al. (2021) Scaling distributed machine learning with in-network aggregation. NSDI.</li></ul><button id="done" data-w="9">Mark week 9 as complete</button><div class="pn"><a href="week-08.html">← Week 8: Midterm Review and Exam</a><a class="r" href="week-10.html">Week 10: Wireless and Mobile Networking →</a></div><footer>Open course · Text and figures CC BY 4.0 · code MIT.</footer></main><script src="assets/app.js"></script><script src="assets/demos.js"></script><script src="assets/chatbot-config.js"></script><script src="assets/chatbot.js" defer></script></body></html>

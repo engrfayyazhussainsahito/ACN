@@ -1,0 +1,5 @@
+(function(){var K='acn-done',d=[];try{d=JSON.parse(localStorage.getItem(K)||'[]')}catch(e){}
+function paint(){document.querySelectorAll('nav a[data-w]').forEach(function(a){a.classList.toggle('done',d.indexOf(a.dataset.w)>-1)});var b=document.getElementById('done');if(b){var x=d.indexOf(b.dataset.w)>-1;b.textContent=x?'Completed ✓ (click to undo)':'Mark week '+b.dataset.w+' as complete'}}
+var b=document.getElementById('done');if(b)b.onclick=function(){var w=b.dataset.w,i=d.indexOf(w);i>-1?d.splice(i,1):d.push(w);try{localStorage.setItem(K,JSON.stringify(d))}catch(e){}paint()};paint();
+var q=document.getElementById('q');q.oninput=function(){var s=q.value.toLowerCase();document.querySelectorAll('nav a').forEach(function(a){a.style.display=a.textContent.toLowerCase().indexOf(s)>-1?'':'none'})};
+document.addEventListener('keydown',function(e){if(e.key==='/'&&document.activeElement!==q){e.preventDefault();q.focus()}})})();
